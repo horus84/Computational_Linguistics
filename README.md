@@ -5,34 +5,35 @@ This repository contains a complete pipeline for training, evaluating, and analy
 
 # Key Features
 
-     Data Preprocessing:
+    
+## Data Preprocessing:
 
-        Cleans and tokenizes raw Linear A sequences.
+    Cleans and tokenizes raw Linear A sequences.
 
-        Simplifies repetitive patterns and incorporates morphological tags.
+    Simplifies repetitive patterns and incorporates morphological tags.
 
-    Modeling:
+## Modeling:
 
-        Implements a PyTorch-based Seq2Seq architecture with attention.
+    Implements a PyTorch-based Seq2Seq architecture with attention.
 
-        Trains both a baseline and a “tagged” variant that encodes prefixes/suffixes.
+    Trains both a baseline and a “tagged” variant that encodes prefixes/suffixes.
 
-    Evaluation:
+## Evaluation:
 
-        Computes BLEU, exact-match accuracy, and edit distance on a held‑out test set.
+    Computes BLEU, exact-match accuracy, and edit distance on a held‑out test set.
 
-        Generates quantitative reports and plots to compare model variants.
+    Generates quantitative reports and plots to compare model variants.
 
-    Analysis & Visualization:
+## Analysis & Visualization:
 
-        Extracts encoder/decoder embeddings for cluster analysis.
+    Extracts encoder/decoder embeddings for cluster analysis.
 
-        Produces attention heatmaps to highlight which Linear A signs influence transliterations.
+    Produces attention heatmaps to highlight which Linear A signs influence transliterations.
 
-        Explores co‑occurrence patterns of signs with numerals and place names to test linguistic hypotheses.
+    Explores co‑occurrence patterns of signs with numerals and place names to test linguistic hypotheses.
 
-    Next Steps & Collaboration:
+## Next Steps & Collaboration:
 
-        Templates for integrating with domain experts.
+    Templates for integrating with domain experts.
 
-        Guidance for iteratively refining hypotheses and expanding the tag set.
+    Guidance for iteratively refining hypotheses and expanding the tag set.
