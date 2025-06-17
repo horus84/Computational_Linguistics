@@ -1,0 +1,382 @@
+import torch
+import torch.nn.functional as F
+import numpy as np
+import matplotlib.pyplot as plt
+import warnings
+from collections import Counter, defaultdict
+import itertools
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
+import Levenshtein
+
+# Beam search decode function (from 0e5afbfb)
+def beam_search_decode(model, src_seq, sign2idx, idx2trans, trans2idx, device,
+                       beam_width=5, max_len=16, length_reward=0.2, prefix_coef=0.5):
+    """Beam search using length reward, prefix bias, adaptive repetition penalty, and contextual blocking."""
+    model.eval()
+    with torch.no_grad():
+        src_idx = [sign2idx.get(s,0) for s in src_seq]
+        src_tensor = torch.tensor(src_idx, dtype=torch.long).unsqueeze(0).to(device)
+        encoder_outputs, encoder_hidden = model.encoder(src_tensor)
+
+        hidden = torch.tanh(model.encoder.fc(torch.cat((encoder_hidden[-2], encoder_hidden[-1]), dim=1))).unsqueeze(0)
+        hidden = hidden.repeat(model.n_layers, 1, 1)
+
+        allow_star = any(ch=='*' for ch in ''.join(src_seq))
+
+        beams = [([trans2idx.get('<sos>', 1)], 0.0, hidden)] # Use .get
+        completed = []
+
+        for step in range(max_len):
+            new_beams = []
+            for seq, score, hid in beams:
+                last = seq[-1]
+                input_token = torch.tensor([last], dtype=torch.long).to(device)
+                logits, new_hidden = model.decoder(input_token, hid, encoder_outputs)
+                log_probs = torch.nn.functional.log_softmax(logits, dim=1).squeeze(0)
+
+                topk_indices = torch.topk(log_probs, min(beam_width, log_probs.size(0))).indices.tolist()
+
+                for idx in topk_indices:
+                    tok = idx2trans.get(idx, '')
+                    if tok.startswith('*') and not allow_star:
+                        continue
+
+                    new_score = score + log_probs[idx]
+                    new_score += length_reward * (len(seq)/(max_len+1))
+                    if idx == last:
+                        new_score -= 1.0 + (len([t for t in seq if t==idx])-1) * 0.5
+
+                    new_seq = seq + [idx]
+                    if idx == trans2idx.get('<eos>', 2): # Use .get
+                        completed.append((new_seq, new_score))
+                    else:
+                        new_beams.append((new_seq, new_score, new_hidden))
+
+            beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_width]
+            if not beams:
+                break
+
+        if completed:
+            best_seq = max(completed, key=lambda x: x[1])[0]
+        elif beams:
+            best_seq = beams[0][0]
+        else:
+            best_seq = [trans2idx.get('<sos>', 1), trans2idx.get('<eos>', 2)] # Use .get
+
+        tokens = [idx2trans.get(i, '') for i in best_seq if i not in (trans2idx.get('<sos>', 1), trans2idx.get('<eos>', 2), trans2idx.get('<pad>', 0))] # Use .get
+        return ' '.join(tokens)
+
+# Data simplification function (from 4c6073e3)
+def simplify_repetitive_sequences(translit_seq):
+    """
+    Simplifies repetitive sequences by replacing consecutive identical tokens
+    with the token followed by a repetition count.
+    Example: ['RA', 'RA', 'RA', 'MI'] -> ['RA+REP3', 'MI']
+    """
+    simplified_seq = []
+    if not translit_seq:
+        return simplified_seq
+
+    current_token = translit_seq[0]
+    count = 1
+
+    for i in range(1, len(translit_seq)):
+        if translit_seq[i] == current_token:
+            count += 1
+        else:
+            if count > 1:
+                simplified_seq.append(f"{current_token}+REP{count}")
+            else:
+                simplified_seq.append(current_token)
+            current_token = translit_seq[i]
+            count = 1
+
+    if count > 1:
+        simplified_seq.append(f"{current_token}+REP{count}")
+    else:
+        simplified_seq.append(current_token)
+
+    return simplified_seq
+
+# Data tagging function (from POPd4mlJhefh)
+def add_simple_morph_tags(translit_seq, prefixes, suffixes):
+    """Adds simple morphological tags based on position and lists."""
+    tagged_seq = []
+    if not isinstance(translit_seq, list):
+        print(f"Warning: add_simple_morph_tags received non-list input: {type(translit_seq)}")
+        return translit_seq
+
+    seq_len = len(translit_seq)
+    for i, token in enumerate(translit_seq):
+        tag = None
+
+        if i == 0 and token in prefixes:
+            tag = '<prefix>'
+        elif i == seq_len - 1 and token in suffixes:
+            tag = '<suffix>'
+        if '+REP' in token: # Check for simplified repetition tag
+            tag = '<repetition>'
+        # Check for numbers and fractions
+        elif token.isdigit() or token in ['¹⁄₂', '¹⁄₄', '¹⁄₃', '²⁄₃', '³⁄₄', '⁵⁄₆', '¹⁄₆', '≈ ¹⁄₆', '≈ ¹⁄₃', '≈ ²⁄₃'] or (isinstance(token, str) and token.replace('/', '').isdigit()):
+             tag = '<numeral>'
+
+        if tag:
+             if '+REP' in token and tag != '<repetition>':
+                  tagged_seq.append(token)
+             else:
+                  tagged_seq.append(f"{token}{tag}")
+        else:
+            tagged_seq.append(token)
+
+    return tagged_seq
+
+# Simplified beam search decode function (from a559bf24)
+def beam_search_decode_simplified(model, src_seq, sign2idx, simplified_idx2trans, simplified_trans2idx, device,
+                       beam_width=5, max_len=16, length_reward=0.2, prefix_coef=0.5):
+    """Beam search for the simplified model."""
+    model.eval()
+    with torch.no_grad():
+        src_idx = [sign2idx.get(s,0) for s in src_seq]
+        src_tensor = torch.tensor(src_idx, dtype=torch.long).unsqueeze(0).to(device)
+        encoder_outputs, encoder_hidden = model.encoder(src_tensor)
+
+        hidden = torch.tanh(model.encoder.fc(torch.cat((encoder_hidden[-2], encoder_hidden[-1]), dim=1))).unsqueeze(0)
+        hidden = hidden.repeat(model.n_layers, 1, 1)
+
+        allow_star = any(ch=='*' for ch in ''.join(src_seq))
+
+        beams = [([simplified_trans2idx.get('<sos>', 1)], 0.0, hidden)]
+        completed = []
+
+        for step in range(max_len):
+            new_beams = []
+            for seq, score, hid in beams:
+                last = seq[-1]
+                input_token = torch.tensor([last], dtype=torch.long).to(device)
+                logits, new_hidden = model.decoder(input_token, hid, encoder_outputs)
+                log_probs = torch.nn.functional.log_softmax(logits, dim=1).squeeze(0)
+
+                topk_indices = torch.topk(log_probs, min(beam_width, log_probs.size(0))).indices.tolist()
+
+                for idx in topk_indices:
+                    tok = simplified_idx2trans.get(idx, '')
+                    if tok.startswith('*') and not allow_star:
+                        continue
+
+                    new_score = score + log_probs[idx]
+                    new_score += length_reward * (len(seq)/(max_len+1))
+                    if idx == last:
+                        new_score -= 1.0 + (len([t for t in seq if t==idx])-1) * 0.5
+
+                    new_seq = seq + [idx]
+                    if idx == simplified_trans2idx.get('<eos>', 2):
+                        completed.append((new_seq, new_score))
+                    else:
+                        new_beams.append((new_seq, new_score, new_hidden))
+
+            beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_width]
+            if not beams:
+                break
+
+        if completed:
+            best_seq = max(completed, key=lambda x: x[1])[0]
+        elif beams:
+            best_seq = beams[0][0]
+        else:
+            best_seq = [simplified_trans2idx.get('<sos>', 1), simplified_trans2idx.get('<eos>', 2)]
+
+        tokens = [simplified_idx2trans.get(i, '') for i in best_seq if i not in (simplified_trans2idx.get('<sos>', 1), simplified_trans2idx.get('<eos>', 2), simplified_trans2idx.get('<pad>', 0))]
+        return ' '.join(tokens)
+
+# Tagged beam search decode function (from e51d103d)
+def beam_search_decode_tagged(model, src_seq, sign2idx, tagged_idx2trans, tagged_trans2idx, device,
+                       beam_width=5, max_len=20, length_reward=0.2, prefix_coef=0.5):
+    """Beam search for the tagged model."""
+    model.eval()
+    with torch.no_grad():
+        src_idx = [sign2idx.get(s,0) for s in src_seq][:model.encoder.embedding.num_embeddings]
+        src_tensor = torch.tensor(src_idx, dtype=torch.long).unsqueeze(0).to(device)
+        encoder_outputs, encoder_hidden = model.encoder(src_tensor)
+
+        hidden = torch.tanh(model.encoder.fc(torch.cat((encoder_hidden[-2], encoder_hidden[-1]), dim=1))).unsqueeze(0)
+        hidden = hidden.repeat(model.n_layers, 1, 1)
+
+        allow_star = any(ch=='*' for ch in ''.join(src_seq))
+
+        beams = [([tagged_trans2idx.get('<sos>', 1)], 0.0, hidden)]
+        completed = []
+
+        for step in range(max_len):
+            new_beams = []
+            for seq, score, hid in beams:
+                last = seq[-1]
+                input_token = torch.tensor([last], dtype=torch.long).to(device)
+                logits, new_hidden = model.decoder(input_token, hid, encoder_outputs)
+                log_probs = torch.nn.functional.log_softmax(logits, dim=1).squeeze(0)
+
+                topk_indices = torch.topk(log_probs, min(beam_width, log_probs.size(0))).indices.tolist()
+
+                for idx in topk_indices:
+                    tok = tagged_idx2trans.get(idx, '')
+                    original_tok = tok.split('<')[0] if '<' in tok else tok
+                    if original_tok.startswith('*') and not allow_star:
+                        continue
+
+                    new_score = score + log_probs[idx]
+                    new_score += length_reward * (len(seq)/(max_len+1))
+                    if idx == last:
+                        new_score -= 1.0 + (len([t for t in seq if t==idx])-1) * 0.5
+
+                    new_seq = seq + [idx]
+                    if idx == tagged_trans2idx.get('<eos>', 2):
+                        completed.append((new_seq, new_score))
+                    else:
+                        new_beams.append((new_seq, new_score, new_hidden))
+
+            beams = sorted(new_beams, key=lambda x: x[1], reverse=True)[:beam_width]
+            if not beams:
+                break
+
+        if completed:
+            best_seq = max(completed, key=lambda x: x[1])[0]
+        elif beams:
+            best_seq = beams[0][0]
+        else:
+            best_seq = [tagged_trans2idx.get('<sos>', 1), tagged_trans2idx.get('<eos>', 2)]
+
+        tokens = [tagged_idx2trans.get(i, '') for i in best_seq if i not in (tagged_trans2idx.get('<sos>', 1), tagged_trans2idx.get('<eos>', 2), tagged_trans2idx.get('<pad>', 0))]
+        return ' '.join(tokens)
+
+# Attention plotting function (adapted from 4yxQGZK3kWGi)
+def plot_attention_heatmap(model, src_seq, sign2idx, idx2trans, trans2idx, device, title="Attention Heatmap"):
+    """
+    Plots attention weights (T × S) as a heatmap with matplotlib only,
+    dynamically matching tick labels to the data shape.
+    Can work with original, simplified, or tagged vocabularies.
+    """
+    model.eval()
+    with torch.no_grad():
+        if not src_seq:
+            print("Source sequence is empty. Cannot generate attention plot.")
+            return
+
+        src_idx = [sign2idx.get(s,0) for s in src_seq][:model.encoder.embedding.num_embeddings]
+        if not src_idx or all(i == 0 for i in src_idx):
+             print("Source sequence contains only unknown or padding tokens. Cannot generate attention plot.")
+             return
+
+        src_tensor = torch.tensor(src_idx, dtype=torch.long).unsqueeze(0).to(device)
+        enc_out, enc_hid = model.encoder(src_tensor)
+
+        try:
+            hid = torch.tanh(model.encoder.fc(torch.cat((enc_hid[-2], enc_hid[-1]), dim=1))).unsqueeze(0)
+            hid = hid.repeat(model.n_layers, 1, 1)
+        except Exception as e:
+            print(f"Error initializing hidden state: {e}")
+            print(f"Encoder hidden state shape: {enc_hid.shape if hasattr(enc_hid, 'shape') else 'N/A'}")
+            return
+
+        if hid is None or hid.numel() == 0:
+             print("Hidden state initialization failed. Cannot generate attention plot.")
+             return
+
+        tok = torch.tensor([trans2idx.get('<sos>', 1)], dtype=torch.long).to(device)
+        attn_list = []
+        predicted_tokens_list = []
+
+        max_steps = len(src_seq)*2 + 5
+        for _ in range(max_steps):
+            if tok.item() == trans2idx.get('<eos>', 2):
+                break
+
+            if hid is None:
+                 print("Hidden state became None during decoding loop.")
+                 break
+
+            logits, hid = model.decoder(tok, hid, enc_out)
+
+            scores = model.decoder.attention(hid, enc_out).squeeze(0)
+            row = scores.cpu().numpy()
+            attn_list.append(row)
+
+            top_i = logits.argmax(1).item()
+            predicted_token = idx2trans.get(top_i, '')
+            predicted_tokens_list.append(predicted_token)
+
+            tok = torch.tensor([top_i], dtype=torch.long).to(device)
+
+    if not attn_list:
+        print("Could not generate attention plot (attn_list is empty).")
+        return
+
+    attn_mat = np.stack(attn_list, axis=0)
+    T, S = attn_mat.shape
+
+    target_labels = predicted_tokens_list[:T]
+    if len(target_labels) != T:
+         print(f"Warning: Mismatch between attention steps ({T}) and number of predicted labels ({len(target_labels)}). Adjusting labels.")
+         target_labels = predicted_tokens_list[:T]
+
+    fig, ax = plt.subplots(figsize=(S * 0.5 + 1, T * 0.5 + 1))
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', module='matplotlib.*')
+
+        im = ax.imshow(attn_mat, aspect='auto', interpolation='nearest')
+        fig.colorbar(im, ax=ax, label='Attention weight')
+
+    ax.set_xticks(np.arange(S))
+    ax.set_yticks(np.arange(T))
+
+    ax.set_xticklabels(src_seq, rotation=45, ha='right')
+    ax.set_yticklabels(target_labels)
+
+    ax.set_xlabel("Source Glyphs")
+    ax.set_ylabel("Predicted Transliteration Tokens")
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
+
+# N-gram analysis functions (from ND4nRGotKy_s)
+def get_ngrams(token_list, n):
+    """Generates n-grams from a list of tokens."""
+    if not isinstance(token_list, (list, tuple)) or len(token_list) < n:
+        return []
+    fill_value = ''
+    if n == 1:
+         return token_list
+    return [' '.join(ngram) for ngram in itertools.zip_longest(*[token_list[i:] for i in range(n)], fillvalue=fill_value)]
+
+def analyze_ngram_positions(token_list, ngram_tokens):
+    """Analyzes the positions (beginning, middle, end) of an n-gram in a token list."""
+    positions = {'beginning': 0, 'middle': 0, 'end': 0}
+    ngram_len = len(ngram_tokens)
+    list_len = len(token_list)
+
+    ngram_key = tuple(ngram_tokens) if isinstance(ngram_tokens, list) else ngram_tokens
+
+    for i in range(list_len - ngram_len + 1):
+        current_ngram = tuple(token_list[i : i + ngram_len])
+
+        if current_ngram == ngram_key:
+            if i == 0:
+                positions['beginning'] += 1
+            elif i == list_len - ngram_len:
+                positions['end'] += 1
+            else:
+                positions['middle'] += 1
+    return positions
+
+
+# Co-occurrence analysis functions (from 60d0ca45)
+def might_be_suffix(token_list, suffix):
+    """Simple check for potential suffix (at end or before a number)."""
+    if len(token_list) > 0 and token_list[-1] == suffix:
+        return True
+    for i in range(len(token_list) - 1):
+        if token_list[i] == suffix and (token_list[i+1].isdigit() or token_list[i+1] in ['¹⁄₂', '¹⁄₄', '¹⁄₃', '²⁄₃', '³⁄₄', '⁵⁄₆', '¹⁄₆', '≈ ¹⁄₆', '≈ ¹⁄₃', '≈ ²⁄₃'] or (isinstance(token_list[i+1], str) and token_list[i+1].replace('/', '').isdigit())):
+             return True
+    return False
+
+def might_be_prefix(token_list, prefix):
+    """Simple check for potential prefix (at beginning)."""
+    return len(token_list) > 0 and token_list[0] == prefix
