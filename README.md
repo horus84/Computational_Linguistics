@@ -1,10 +1,11 @@
 # Computational_Linguistics
-Overview
+# Overview
 
 This repository contains a complete pipeline for training, evaluating, and analyzing a sequence‑to‑sequence model that transliterates Linear A sign sequences into Latin characters. It also explores data‑driven hypotheses about morphological patterns in Linear A through positional and co‑occurrence analyses, attention heatmaps, and embedding extractions.
-Key Features
 
-    Data Preprocessing:
+# Key Features
+
+     Data Preprocessing:
 
         Cleans and tokenizes raw Linear A sequences.
 
