@@ -43,4 +43,23 @@ This repository contains a complete pipeline for training, evaluating, and analy
 If you use this work in your research, please cite:
 
     **horus84(Tanishk), “Seq2Seq Transliteration and Linguistic Analysis of the Linear A Script,” 2025.**
+
+# Also include my IVS work too.
+
+This repository houses a Jupyter notebook that walks through the preprocessing, visualization, and preliminary sequence‑to‑sequence experiments on the Indus Valley Script (IVS). While this is an exploratory proof‑of‑concept, it lays the groundwork for more comprehensive modeling and linguistic hypothesis testing.
+Key Components
+
+## Jupyter Notebook
+
+        Untitled11.ipynb contains all the code cells for data loading, cleaning, tokenization, and initial modeling experiments.
+
+        Inline plots visualize sign‑frequency distributions, co‑occurrence heatmaps, and sample attention weights.
+
+## Dataset
+
+        A hand‑curated JSON/CSV file of IVS sign sequences paired with proposed transliteration labels.
+
+        Includes metadata on sequence provenance (e.g., find‑spot, inscription length).    
     
+# More refernces and results could be seen here
+Research: (https://www.academia.edu/129821471/Empirical_Refutation_of_Yajnadevams_Devanagari_Based_Decipherment_of_the_Indus_Script)
