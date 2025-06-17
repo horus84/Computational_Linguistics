@@ -37,3 +37,10 @@ This repository contains a complete pipeline for training, evaluating, and analy
     Templates for integrating with domain experts.
 
     Guidance for iteratively refining hypotheses and expanding the tag set.
+
+# Citation
+
+If you use this work in your research, please cite:
+
+    **horus84(Tanishk), “Seq2Seq Transliteration and Linguistic Analysis of the Linear A Script,” 2025.**
+    
