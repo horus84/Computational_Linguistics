@@ -51,7 +51,7 @@ Key Components
 
 ## Jupyter Notebook
 
-        Untitled11.ipynb contains all the code cells for data loading, cleaning, tokenization, and initial modeling experiments.
+       IVS.ipynb contains all the code cells for data loading, cleaning, tokenization, and initial modeling experiments.
 
         Inline plots visualize sign‑frequency distributions, co‑occurrence heatmaps, and sample attention weights.
 
