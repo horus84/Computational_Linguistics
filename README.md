@@ -1,2 +1,37 @@
 # Computational_Linguistics
-Linear A and Indus Valley Script
+Overview
+
+This repository contains a complete pipeline for training, evaluating, and analyzing a sequence‑to‑sequence model that transliterates Linear A sign sequences into Latin characters. It also explores data‑driven hypotheses about morphological patterns in Linear A through positional and co‑occurrence analyses, attention heatmaps, and embedding extractions.
+Key Features
+
+    Data Preprocessing:
+
+        Cleans and tokenizes raw Linear A sequences.
+
+        Simplifies repetitive patterns and incorporates morphological tags.
+
+    Modeling:
+
+        Implements a PyTorch-based Seq2Seq architecture with attention.
+
+        Trains both a baseline and a “tagged” variant that encodes prefixes/suffixes.
+
+    Evaluation:
+
+        Computes BLEU, exact-match accuracy, and edit distance on a held‑out test set.
+
+        Generates quantitative reports and plots to compare model variants.
+
+    Analysis & Visualization:
+
+        Extracts encoder/decoder embeddings for cluster analysis.
+
+        Produces attention heatmaps to highlight which Linear A signs influence transliterations.
+
+        Explores co‑occurrence patterns of signs with numerals and place names to test linguistic hypotheses.
+
+    Next Steps & Collaboration:
+
+        Templates for integrating with domain experts.
+
+        Guidance for iteratively refining hypotheses and expanding the tag set.
