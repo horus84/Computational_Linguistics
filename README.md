@@ -44,7 +44,7 @@ If you use this work in your research, please cite:
 
     **horus84(Tanishk), “Seq2Seq Transliteration and Linguistic Analysis of the Linear A Script,” 2025.**
 
-# Also include my IVS work too.
+# Also includes my IVS work too.
 
 This repository houses a Jupyter notebook that walks through the preprocessing, visualization, and preliminary sequence‑to‑sequence experiments on the Indus Valley Script (IVS). While this is an exploratory proof‑of‑concept, it lays the groundwork for more comprehensive modeling and linguistic hypothesis testing.
 Key Components
